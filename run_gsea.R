@@ -188,7 +188,7 @@ getRankedGeneList <- function(data.path, exp.path, outfolder,
   return(res)
 }
 # fGSEA Functions
-getEnrichedPathways <- function(experiment, pathways, nperm, p.value, 
+getEnrichedPathways <- function(experiment, pathways, nperm, p.value, dname, 
                                 outfolder, verbose){
   runfGSEA <- function(gene.list, pathways, nperm, p.value = 0.05,
                        title = NULL, outfolder = NULL, verbose = F)
@@ -340,10 +340,11 @@ print(arguments)
 
 data.path     <- arguments$data_path
 exp.path      <- arguments$experiment_design
+gmt.file      <- arguments$gmt_file
 outfolder     <- arguments$outfolder
 alpha.value   <- arguments$alpha_value
 p.value       <- arguments$p_value
-nperm         <- arguments$nperm
+nperm         <- as.integer(arguments$nperm)
 verbose       <- as.integer(arguments$verbose)
 
 if(as.integer(arguments$verbose) == 1){
@@ -355,11 +356,14 @@ if(as.integer(arguments$verbose) == 1){
 # 1. Generate a ranked list of genes
 deseq.exp <- getRankedGeneList(data.path, exp.path, outfolder)
 
+dname <- basename(dirname(exp.path))
+
 # 2. Run Enrichment Analysis using fGSEA
 enrichments <- getEnrichedPathways(experiment = deseq.exp, 
                                    pathways = gmt.file, 
                                    outfolder = outfolder,
-                                   verbose = verbose, 
+                                   verbose = verbose,
+                                   dname   = dname,
                                    nperm, 
                                    p.value)
 
