@@ -1,8 +1,4 @@
 # DESeq2 Functions
-# removeDuplicates  <- function(x){
-#   x <- x[!duplicated(rownames(x)),]
-#   return(x)
-# }
 # convertGeneType   <- function(gene.list, to.type = "symbol"){
 #   #https://bioinformatics.stackexchange.com/questions/5229/converting-gene-symbol-to-ensembl-id-in-r
 #   library(EnsDb.Hsapiens.v86)
@@ -42,16 +38,6 @@
 #     return(list("SYMBOL" = gene.id))
 #   }
 # }
-# getColData        <- function(exp.data, cts){
-#   if(length(exp.data[[1]]) != length(colnames(cts))){
-#     print("Detecting a difference in sample size between count data and experiment design data, conforming...")
-#     exp.data <- dplyr::filter(exp.data, exp.data[[1]] %in% colnames(cts))
-#   }
-#   
-#   coldata <- data.frame(row.names = colnames(cts),
-#                         "condition" = factor(exp.data[[2]]))
-#   return(coldata)
-# }
 getExpPerms       <- function(coldata){
   condition <- as.vector(unique(coldata$condition))
 
@@ -85,22 +71,78 @@ runDESeq          <- function(cts, coldata){
   
   return(dds)
 }
+getDESeqRes <- function(dds, contrast, p.value, outfolder, serialize){
+  # Get genes that are differentially expressed
+  
+  if(!is.null(contrast)){
+    res <- results(dds, contrast = contrast) %>% na.omit() %>% as.data.frame()
+  } else{
+    res <- results(dds) %>% na.omit() %>% as.data.frame()
+  }
+  
+  title <- paste(levels(coldata$condition), collapse = " vs. ")
+  
+  # Filter out the significant genes based on p.value and order/sort them
+  sig <- res[res$padj < p.value,]
+  sig <- sig[order(sig$padj),]
+  sig <- sig[order(sig$log2FoldChange, decreasing = T), ]
+  sig <- sig %>% as.data.frame() %>% arrange(desc(log2FoldChange), desc(padj))
+  top.10.genes <- rownames(sig[1:10,])
+  
+  # Prepare a dataframe ready to be serialized
+  out.df <- list("res" = res,
+                 "sig" = sig,
+                 "top10" = as.data.frame(top.10.genes))
+  if(serialize){
+    writexl::write_xlsx(out.df, 
+                        here(outfolder,paste0(gsub(" ", "_", title), '_deg.xlsx')))
+  }
+  out.df$res <- rownames_to_column(out.df$res, var = "gene_symbol")
+  out.df$sig <- rownames_to_column(out.df$sig, var = "gene_symbol")
+  
+  if(nrow(sig) > 0){
+    out.df$any.sig <- T
+    print(paste0("DESeq2 analysis found ", nrow(sig), " significant genes!"))
+    
+  } else{
+    out.df$any.sig <- F
+    print("DESeq2 found 0 significant genes!")
+  }
+  
+  # Plot the results via the Volcano Plot
+  
+  p <- EnhancedVolcano(res,
+                       lab = rownames(res),
+                       x = 'log2FoldChange',
+                       y = 'pvalue',
+                       title = title) + theme_prism()
 
+  if(serialize){
+    png(here(outfolder,paste0(gsub(" ", "_", title), '_volcano.png')),
+        width = 2400, height = 1800, res = 300)
+    print(p)
+    dev.off()
+  }
+  
+  out.df <- list(significant = out.df$sig,
+                 res         = out.df$res,
+                 vplot       = p,
+                 any.sig     = out.df$any.sig)
+  
+  return(out.df)
 
-
-
-
-
-
-
-
-
-getRankedGeneList <- function(data.path, exp.path, outfolder, dname,
-                              alpha.value = 0.1, p.value = 0.05, 
-                              do.contrasts = T, 
-                              verbose = T, serialise = F){
-  cts            <- readFile(data.path)
-  exp.data       <- readFile(exp.path)
+}
+getRankedGeneList <- function(cts.path, exp.path, outfolder,
+                              p.value, do.contrasts, 
+                              verbose, serialize){
+  cts <- readFile(cts.path)
+  exp <- readFile(exp.path)
+  # outfolder <- dirname(cts.path)
+  
+  # Gets the experiment name, assuming the folder in which the counts file is in is also the experiment name
+  exp.name <- cts.path %>% 
+    dirname() %>% 
+    basename()
 
   # Remove duplicated values
   dup.marker <- all(duplicated(cts[,1]))
@@ -122,38 +164,40 @@ getRankedGeneList <- function(data.path, exp.path, outfolder, dname,
   cts <- round(cts)
   
   # Create a 'coldata' object from the experiment design
-  coldata <- getColData(exp.data, cts)
+  coldata <- getColData(exp, cts)
   
   # Create a DESeq2 matrix, filter the matrix for low counts (=cts.filter)
   # and run the DESeq() algorithm
   dds     <- runDESeq(cts, coldata)
-  
-  # Calculate all possible permutations of the experiment 
-  # (e.g. a vs. b ~ b vs. a)
-  all_perms <- getExpPerms(coldata)
-  
-  contrasts <- list()
-  res <- list()
-  
+
   # Extract the results for all possible contrasts of the experiments
   if(do.contrasts){
+    # Calculate all possible permutations of the experiment 
+    # (e.g. a vs. b ~ b vs. a)
+    all_perms <- getExpPerms(coldata)
+    
+    contrasts <- list()
+    res <- list()
+    
     for(i in seq_along(all_perms)){
       pname <- names(all_perms)[i]
-      dir.create(here::here(outfolder, dname, pname), showWarnings = F, recursive = T)
+      # dir.create(here::here(outfolder, dname, pname), showWarnings = F, recursive = T)
       
       print(paste0("Looking for DEGs in ", pname))
+      res.dir <- here::here(outfolder, pname)
+      
+      if(serialize){
+        dir.create(res.dir, F, T)
+        saveRDS(res, here::here(res.dir, "diffseq_exp.RDS"))
+      }
+      
       contrasts[[pname]] <- c(names(coldata), paste0(all_perms[[pname]]))
       res[[pname]]       <- getDESeqRes(dds,
-                                        contrast = contrasts[[pname]], 
-                                        alpha.value = alpha.value,
-                                        p.value = p.value)
-      if(!res[[pname]]$any.sig){
-        print(paste0("After correcting for multiple testing, there were no significant genes left for contrast ", pname))
-      } else{
-        if(verbose){
-          print(paste0("Found ",nrow(res[[pname]]$significant), " significant gene(s) in ", pname))
-        }
-        
+                                        contrast = contrasts[[pname]],
+                                        outfolder = res.dir,
+                                        p.value = p.value, 
+                                        serialize = serialize)
+
         # png(here::here(outfolder, dname, pname, paste0('MAplot.png')))
         # DESeq2::plotMA(res[[pname]]$p.ma.data, ylim=c(-2,2))
         # dev.off()
@@ -163,34 +207,31 @@ getRankedGeneList <- function(data.path, exp.path, outfolder, dname,
         # dev.off()
         
       }
+    } else{
+      dir.create(outfolder, F, T)
+      res <- getDESeqRes(dds, p.value, outfolder = outfolder, 
+                         contrast = NULL, serialize = serialize)
     }
-  } else{
-    res <- getDESeqRes(dds, 
-                       alpha.value = alpha.value,
-                       median.filter = median.filter)
-  }
   
   
-  dir.create(here::here(outfolder, dname, pname), showWarnings = F, recursive = T)
+  # dir.create(here::here(outfolder, dname, pname), showWarnings = F, recursive = T)
   # writeLines(dname, here::here(outfolder, ".config.txt"))
-  if(serialise){
-    saveRDS(res, here::here(outfolder, dname, "diffseq_exp.RDS"))
-  }
+  
   
   return(res)
 }
 
 # fGSEA Functions
 getEnrichedPathways <- function(experiment, pathways, nperm, p.value, 
-                                outfolder, verbose, dname){
+                                outfolder, verbose, serialize){
   runfGSEA <- function(gene.list, pathways, nperm, p.value = 0.05,
                        title = NULL, outfolder = NULL, verbose = F)
   {
     res <- gene.list %>% 
-      dplyr::select(symbol, stat) %>% 
+      dplyr::select(gene_symbol, stat) %>% 
       na.omit() %>% 
       distinct() %>% 
-      group_by(symbol) %>% 
+      group_by(gene_symbol) %>% 
       summarize(stat=mean(stat))
     
     ranks <- deframe(res)
@@ -248,9 +289,9 @@ getEnrichedPathways <- function(experiment, pathways, nperm, p.value,
     
     # Extract genes from each fGSEA enriched pathway
     enriched.p %>% 
-      enframe("pathway", "symbol") %>% 
+      enframe("pathway", "gene_symbol") %>% 
       unnest() %>% 
-      inner_join(res, by="symbol")
+      inner_join(res, by="gene_symbol")
     
     # if(!missing(outfolder)){
     #   pname <- tools::file_path_sans_ext(basename(gmt.hallmark))
@@ -273,31 +314,54 @@ getEnrichedPathways <- function(experiment, pathways, nperm, p.value,
       exp.name <- names(deseq.exp)[i]
       print(paste0("Running fGSEA on ", exp.name, "..."))
       
-      res.dir <- here::here(outfolder, dname, exp.name)
-      print(res.dir)
-      dir.create(res.dir, showWarnings = F, recursive = T)
-      
       res[[exp.name]] <- runfGSEA(gene.list = deseq.exp[[exp.name]]$res, 
-                                  pathways = gmt.file, outfolder = outfolder,
+                                  pathways = gmt.file, outfolder = res.dir,
                                   nperm = nperm, title = title,
                                   verbose = verbose)
       
-      # pdf(here(res.dir, paste0(attributes(res[[exp.name]]$plot)$pname,'.pdf')))
-      # print(res[[exp.name]]$plot)
-      # dev.off()
-      
-      ggsave(here(res.dir, paste0(attributes(res[[exp.name]]$plot)$pname,'.png')),
-             res[[exp.name]]$plot, 
-             width = 5, height = 3)
-      
-      saveRDS(res[[exp.name]], here(res.dir, paste0(attributes(res[[exp.name]]$plot)$pname, '_results.RDS')))
-      
+      if(serialize){
+        res.dir <- here::here(outfolder, exp.name)
+        if(verbose){
+          print(res.dir)
+        }
+        
+        dir.create(res.dir, showWarnings = F, recursive = T)
+        
+        ggsave(here(res.dir, paste0(attributes(res[[exp.name]]$plot)$pname,'.png')),
+               res[[exp.name]]$plot, 
+               width = 5, height = 3)
+        
+        saveRDS(res[[exp.name]], here(res.dir, paste0(attributes(res[[exp.name]]$plot)$pname, '_results.RDS')))
+        
+        # pdf(here(res.dir, paste0(attributes(res[[exp.name]]$plot)$pname,'.pdf')))
+        # print(res[[exp.name]]$plot)
+        # dev.off()
+      }
     }
   } else{
     res <- runfGSEA(gene.list = deseq.exp[[exp.name]]$res, 
                     pathways = gmt.file, outfolder = outfolder,
                     nperm = nperm, title = title,
                     verbose = verbose)
+    
+    if(serialize){
+      res.dir <- here::here(outfolder)
+      if(verbose){
+        print(res.dir)
+      }
+      
+      dir.create(res.dir, showWarnings = F, recursive = T)
+      
+      ggsave(here(res.dir, paste0(attributes(res$plot)$pname,'.png')),
+             res$plot, 
+             width = 5, height = 3)
+      
+      saveRDS(res, here(res.dir, paste0(attributes(res$plot)$pname, '_results.RDS')))
+      
+      # pdf(here(res.dir, paste0(attributes(res[[exp.name]]$plot)$pname,'.pdf')))
+      # print(res[[exp.name]]$plot)
+      # dev.off()
+    }
   }
   
   return(res)
@@ -330,7 +394,7 @@ Options:
 arguments <- docopt(doc, quoted_args = TRUE, help = TRUE)
 print(arguments)
 
-data.path     <- normalizePath(arguments$data_path)
+cts.path     <- normalizePath(arguments$data_path)
 exp.path      <- arguments$experiment_design
 gmt.file      <- arguments$gmt_file
 outfolder     <- normalizePath(arguments$outfolder)
@@ -344,161 +408,46 @@ if(as.integer(arguments$verbose) == 1){
   verbose <- F
 }
 
-dname <- basename(dirname(exp.path))
+main <- function(cts.path, exp.path, gmt.file,
+                 outfolder, p.value, nperm, 
+                 verbose, do.contrasts = T, serialize = T){
+  
+  # dname <- basename(dirname(exp.path))
+  
+  # 1. Generate a ranked list of genes
+  deseq.exp <- getRankedGeneList(cts.path = cts.path, exp.path = exp.path, 
+                                 outfolder = outfolder, p.value = p.value, 
+                                 verbose = verbose, 
+                                 do.contrasts = do.contrasts, 
+                                 serialize = serialize)
+  
+  # 2. Run Enrichment Analysis using fGSEA
+  enrichments <- getEnrichedPathways(experiment = deseq.exp, 
+                                     pathways   = gmt.file, 
+                                     outfolder  = outfolder,
+                                     verbose    = verbose,
+                                     nperm      = nperm, 
+                                     p.value    = p.value,
+                                     serialize  = serialize)
+  
+}
 
-# 1. Generate a ranked list of genes
-deseq.exp <- getRankedGeneList(data.path, exp.path, outfolder, dname)
 
-# 2. Run Enrichment Analysis using fGSEA
-enrichments <- getEnrichedPathways(experiment = deseq.exp, 
-                                   pathways   = gmt.file, 
-                                   outfolder  = outfolder,
-                                   verbose    = verbose, 
-                                   dname,
-                                   nperm      = 1000, 
-                                   p.value    = 0.05)
+
 
 #----- Main -----
-cts.path <- "~/Documents/Cancer_Studies_PhD/Studies/Study_Biphasic/datasets/UvM/Cunniff_counts.csv"
-exp.path <- "~/Documents/Cancer_Studies_PhD/Studies/Study_Biphasic/datasets/UvM/Cunniff_expdata.xlsx"
-# main <- function(data.path, exp.path, alpha.value, cts.filter,
-#                  p.value, median.filter, contrasts,
-#                  outfolder, do.contrasts){ 
-# }
-# main(data.path = data.path, exp.path = exp.path,
-#      alpha.value = alpha.value,
-#      p.value = p.value, do.contrasts = T, 
-#      verbose = T, serialise = F
-#      outfolder = outfolder, do.contrasts = T)
+do.contrasts <- T
+serialize    <- T
+verbose      <- T
+p.value      <- 0.05
+nperm        <- 1000
+cts.path     <- "~/Documents/Cancer_Studies_PhD/Studies/Study_Biphasic/datasets/UvM/Cunniff_counts.csv"
+exp.path     <- "~/Documents/Cancer_Studies_PhD/Studies/Study_Biphasic/datasets/UvM/Cunniff_expdata.xlsx"
+outfolder    <- "~/Documents/Cancer_Studies_PhD/Studies/Study_Biphasic/results/UvM"
+gmt.file     <- "/home/jr453/bioinf-tools/db/molsigs/msigdb/h.all.v2023.2.Hs.symbols.gmt"
 
-cts <- readFile(cts.path)
-exp <- readFile(exp.path)
-dir.name <- dirname(cts.path)
+main(cts.path, exp.path, gmt.file,
+     outfolder, p.value, nperm, 
+     verbose, do.contrasts = T, serialize = T)
 
-exp.name <-here('torricelli_E_vs_S', 'cts_pure.csv') %>% 
-  dirname() %>% 
-  basename()
-
-# Slight pre-processing
-rownames(cts) <- cts[[1]]
-cts <- cts[,-1]
-# cts <- cts[rowSums(cts == 0) == 0, ] # Remove rows with 0 values
-
-if(any(is.na(cts))){
-  if(verbose){
-    print("Detected NA values, removing...")
-  }
-  cts <- na.omit(cts)
-}
-
-coldata <- getColData(exp, cts)
-cts <- removeDuplicates(cts)
-
-dds <- runDESeq(cts = cts, coldata = coldata)
-
-getDESeqRes       <- function(dds, contrast, p.value, ){
-
-  # Get genes that are differentially expressed
-  if(!is.null(contrast)){
-    res <- results(dds, alpha = alpha.value, contrast = contrast, )
-  } else{
-    res <- results(dds, alpha = alpha.value)
-  }
-
-  res$symbol <- rownames(res)
-
-  # Filter for significance
-  sigs <- na.omit(res)
-  sigs <- sigs[sigs$padj < p.value,]
-
-  sigs$symbol <- rownames(sigs)
-
-  # MA plot
-  p.ma.data <- DESeq2::plotMA(res, returnData = T)
-
-  # Volcano plot
-  p.volc <- EnhancedVolcano::EnhancedVolcano(res, x = "log2FoldChange", y = "padj", lab = res$symbol)
-
-  if(nrow(sigs) > 0){
-    return(list(significant = sigs,
-                res         = as.data.frame(res),
-                vplot       = p.volc,
-                p.ma.data   = p.ma.data,
-                any.sig     = T))
-
-  } else{
-    return(list(significant = sigs,
-                res         = as.data.frame(res),
-                vplot       = p.volc,
-                p.ma.data   = p.ma.data,
-                any.sig     = F))
-  }
-}
-
-getDESeqRes       <- function(dds, contrast, p.value, dir.name, serialize){
-# Get genes that are differentially expressed
-if(!is.null(contrast)){
-  res <- results(dds, contrast = contrast) %>% na.omit() %>% as.data.frame()
-} else{
-  res <- results(dds) %>% na.omit() %>% as.data.frame()
-}
-
-# Get the results from the dds objects
-res <- results(dds) %>% na.omit() %>% as.data.frame()
-
-# Filter out the significant genes based on p.value and order/sort them
-sig <- res[res$padj < p.value,]
-sig <- sig[order(sig$padj),]
-sig <- sig[order(sig$log2FoldChange, decreasing = T), ]
-sig <- sig %>% as.data.frame() %>% arrange(desc(log2FoldChange), desc(padj))
-top.10.genes <- rownames(sig[1:10,])
-
-# Prepare a dataframe ready to be serialized
-out.df <- list("res" = res,
-               "sig" = sig,
-               "top10" = as.data.frame(top.10.genes))
-out.df$res <- rownames_to_column(out.df$res, var = "gene_symbol")
-out.df$sig <- rownames_to_column(out.df$sig, var = "gene_symbol")
-
-nrow(sig)
-
-if(nrow(sig) > 0){
-  out.df$any.sig <- T
-  print(paste0("DESeq2 analysis found ", nrow(sig), " significant genes!"))
   
-} else{
-  out.df$any.sig <- F
-  print("DESeq2 found 0 significant genes!")
-}
-
-# Plot the results via the Volcano Plot
-title <- paste(levels(coldata$condition), collapse = " vs. ")
-
-p <- EnhancedVolcano(res,
-                     lab = rownames(res),
-                     x = 'log2FoldChange',
-                     y = 'pvalue',
-                     title = title) + theme_prism()
-
-png(here(dir.name,paste0(gsub(" ", "_", title), '_volcano.png')),
-    width = 2400, height = 1800, res = 300)
-print(p)
-dev.off()
-
-# out.df$res <- rownames_to_column(out.df$res, var = "gene_symbol")
-# out.df$sig <- rownames_to_column(out.df$sig, var = "gene_symbol")
-
-if(serialize){
-  writexl::write_xlsx(out.df, 
-                      here(dir.name,paste0(gsub(" ", "_", title), '_deg.xlsx')))
-}
-
-return(list(significant = sig,
-            res         = as.data.frame(res),
-            vplot       = print(p),
-            any.sig     = out.df$any.sig))
-}
-
-p.value <- 0.05
-res <- getDESeqRes(dds, p.value, dir.name = dir.name, contrast = NULL, serialize = F)
-
