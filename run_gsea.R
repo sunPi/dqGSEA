@@ -38,7 +38,7 @@
 #     return(list("SYMBOL" = gene.id))
 #   }
 # }
-getExpPerms       <- function(coldata){
+getExpPerms      <- function(coldata){
   condition <- as.vector(unique(coldata$condition))
 
   all_perms <- combinat::permn(condition)
@@ -50,7 +50,7 @@ removeDuplicates <- function(x){
   x <- x[!duplicated(rownames(x)),]
   return(x)
 }
-getColData <- function(exp.data, cts){
+getColData       <- function(exp.data, cts){
   
   # cts <- cts[rowSums(cts == 0) == 0, ] # Remove rows with 0 values
   
@@ -63,7 +63,7 @@ getColData <- function(exp.data, cts){
                         "condition" = factor(exp.data[[2]]))
   return(coldata)
 }
-runDESeq          <- function(cts, coldata){
+runDESeq         <- function(cts, coldata){
   dds <- DESeqDataSetFromMatrix(countData=cts, 
                                 colData=coldata, 
                                 design= ~ condition) # Set tidy = T if data in long format
@@ -71,9 +71,8 @@ runDESeq          <- function(cts, coldata){
   
   return(dds)
 }
-getDESeqRes <- function(dds, contrast, p.value, outfolder, serialize){
+getDESeqRes      <- function(dds, coldata, contrast, p.value, outfolder, serialize){
   # Get genes that are differentially expressed
-  
   if(!is.null(contrast)){
     res <- results(dds, contrast = contrast) %>% na.omit() %>% as.data.frame()
   } else{
@@ -134,7 +133,7 @@ getDESeqRes <- function(dds, contrast, p.value, outfolder, serialize){
 }
 getRankedGeneList <- function(cts.path, exp.path, outfolder,
                               p.value, do.contrasts, 
-                              verbose, serialize){
+                              verbose, serialize, dname){
   cts <- readFile(cts.path)
   exp <- readFile(exp.path)
   # outfolder <- dirname(cts.path)
@@ -178,13 +177,13 @@ getRankedGeneList <- function(cts.path, exp.path, outfolder,
     
     contrasts <- list()
     res <- list()
-    
+
     for(i in seq_along(all_perms)){
       pname <- names(all_perms)[i]
       # dir.create(here::here(outfolder, dname, pname), showWarnings = F, recursive = T)
       
       print(paste0("Looking for DEGs in ", pname))
-      res.dir <- here::here(outfolder, pname)
+      res.dir <- here::here(outfolder, dname, pname)
       
       if(serialize){
         dir.create(res.dir, F, T)
@@ -192,7 +191,7 @@ getRankedGeneList <- function(cts.path, exp.path, outfolder,
       }
       
       contrasts[[pname]] <- c(names(coldata), paste0(all_perms[[pname]]))
-      res[[pname]]       <- getDESeqRes(dds,
+      res[[pname]]       <- getDESeqRes(dds = dds, coldata = coldata,
                                         contrast = contrasts[[pname]],
                                         outfolder = res.dir,
                                         p.value = p.value, 
@@ -209,7 +208,7 @@ getRankedGeneList <- function(cts.path, exp.path, outfolder,
       }
     } else{
       dir.create(outfolder, F, T)
-      res <- getDESeqRes(dds, p.value, outfolder = outfolder, 
+      res <- getDESeqRes(dds = dds, coldata = coldata, p.value = p.value, outfolder = outfolder, 
                          contrast = NULL, serialize = serialize)
     }
   
@@ -222,8 +221,8 @@ getRankedGeneList <- function(cts.path, exp.path, outfolder,
 }
 
 # fGSEA Functions
-getEnrichedPathways <- function(experiment, pathways, nperm, p.value, 
-                                outfolder, verbose, serialize){
+getEnrichedPathways <- function(deseq.exp, pathways, nperm, p.value, 
+                                outfolder, verbose, serialize, dname){
   runfGSEA <- function(gene.list, pathways, nperm, p.value = 0.05,
                        title = NULL, outfolder = NULL, verbose = F)
   {
@@ -320,7 +319,8 @@ getEnrichedPathways <- function(experiment, pathways, nperm, p.value,
                                   verbose = verbose)
       
       if(serialize){
-        res.dir <- here::here(outfolder, exp.name)
+        res.dir <- here::here(outfolder, dname, exp.name)
+        
         if(verbose){
           print(res.dir)
         }
@@ -345,7 +345,8 @@ getEnrichedPathways <- function(experiment, pathways, nperm, p.value,
                     verbose = verbose)
     
     if(serialize){
-      res.dir <- here::here(outfolder)
+      dname <- tools::file_path_sans_ext(basename(gmt.file))
+      res.dir <- here::here(outfolder, dname)
       if(verbose){
         print(res.dir)
       }
@@ -365,6 +366,36 @@ getEnrichedPathways <- function(experiment, pathways, nperm, p.value,
   }
   
   return(res)
+}
+# Main Function
+main <- function(cts.path, exp.path, gmt.file,
+                 outfolder, p.value, nperm, 
+                 verbose, do.contrasts = T, serialize = T, deseq.exp = NULL){
+  
+  # dname <- basename(dirname(exp.path))
+  dname <- tools::file_path_sans_ext(basename(gmt.file))
+  # 1. Generate a ranked list of genes
+  if(is.null(deseq.exp)){
+    deseq.exp <- getRankedGeneList(cts.path     = cts.path, 
+                                   exp.path     = exp.path, 
+                                   outfolder    = outfolder, 
+                                   p.value      = p.value, 
+                                   verbose      = verbose, 
+                                   do.contrasts = do.contrasts, 
+                                   serialize    = serialize, 
+                                   dname        = dname)
+  }
+  
+  # 2. Run Enrichment Analysis using fGSEA
+  enrichments <- getEnrichedPathways(deseq.exp = deseq.exp, 
+                                     pathways  = gmt.file, 
+                                     outfolder = outfolder,
+                                     verbose   = verbose,
+                                     nperm     = nperm, 
+                                     p.value   = p.value,
+                                     serialize = serialize,
+                                     dname     = dname )
+  
 }
 
 pkgs <- c("here", "DESeq2", "org.Hs.eg.db", "EnhancedVolcano",
@@ -386,6 +417,7 @@ Options:
   -p --p_value=<DOUBLE>         Significance level for the DEG genes [Default: 0.05].
   -g --gmt_file=<PATH>          Path to the gene signature in the '.gmt' format.
   -n --nperm=<INT>              Number of permutations to run the GSEA on.
+  -s --deseq_exp=<PATH>         Specify a ranked list of genes for GSEA.
   -v --verbose=<BOOLEAN>        If set to 1, prints messages verbously.
   -V --version
 "-> doc
@@ -394,13 +426,14 @@ Options:
 arguments <- docopt(doc, quoted_args = TRUE, help = TRUE)
 print(arguments)
 
-cts.path     <- normalizePath(arguments$data_path)
-exp.path      <- arguments$experiment_design
-gmt.file      <- arguments$gmt_file
-outfolder     <- normalizePath(arguments$outfolder)
-p.value       <- as.double(arguments$p_value)
-nperm         <- as.integer(arguments$nperm)
-verbose       <- as.integer(arguments$verbose)
+cts.path  <- normalizePath(arguments$data_path)
+exp.path  <- arguments$experiment_design
+gmt.file  <- arguments$gmt_file
+outfolder <- normalizePath(arguments$outfolder)
+p.value   <- as.double(arguments$p_value)
+nperm     <- as.integer(arguments$nperm)
+deseq.exp <- arguments$deseq_exp
+verbose   <- as.integer(arguments$verbose)
 
 if(as.integer(arguments$verbose) == 1){
   verbose <- T
@@ -408,46 +441,29 @@ if(as.integer(arguments$verbose) == 1){
   verbose <- F
 }
 
-main <- function(cts.path, exp.path, gmt.file,
-                 outfolder, p.value, nperm, 
-                 verbose, do.contrasts = T, serialize = T){
-  
-  # dname <- basename(dirname(exp.path))
-  
-  # 1. Generate a ranked list of genes
-  deseq.exp <- getRankedGeneList(cts.path = cts.path, exp.path = exp.path, 
-                                 outfolder = outfolder, p.value = p.value, 
-                                 verbose = verbose, 
-                                 do.contrasts = do.contrasts, 
-                                 serialize = serialize)
-  
-  # 2. Run Enrichment Analysis using fGSEA
-  enrichments <- getEnrichedPathways(experiment = deseq.exp, 
-                                     pathways   = gmt.file, 
-                                     outfolder  = outfolder,
-                                     verbose    = verbose,
-                                     nperm      = nperm, 
-                                     p.value    = p.value,
-                                     serialize  = serialize)
-  
-}
-
-
-
 
 #----- Main -----
-do.contrasts <- T
-serialize    <- T
-verbose      <- T
-p.value      <- 0.05
-nperm        <- 1000
-cts.path     <- "~/Documents/Cancer_Studies_PhD/Studies/Study_Biphasic/datasets/UvM/Cunniff_counts.csv"
-exp.path     <- "~/Documents/Cancer_Studies_PhD/Studies/Study_Biphasic/datasets/UvM/Cunniff_expdata.xlsx"
-outfolder    <- "~/Documents/Cancer_Studies_PhD/Studies/Study_Biphasic/results/UvM"
-gmt.file     <- "/home/jr453/bioinf-tools/db/molsigs/msigdb/h.all.v2023.2.Hs.symbols.gmt"
+# do.contrasts <- T
+# serialize    <- T
+# verbose      <- T
+# p.value      <- 0.05
+# nperm        <- 1000
+# cts.path     <- "~/Documents/Cancer_Studies_PhD/Studies/Study_Biphasic/datasets/UvM/Cunniff_counts.csv"
+# exp.path     <- "~/Documents/Cancer_Studies_PhD/Studies/Study_Biphasic/datasets/UvM/Cunniff_expdata.xlsx"
+# outfolder    <- "~/Documents/Cancer_Studies_PhD/Studies/Study_Biphasic/results/UvM"
+# gmt.file     <- "/home/jr453/bioinf-tools/db/molsigs/msigdb/h.all.v2023.2.Hs.symbols.gmt"
+if(arguments$deseq_exp == "NULL"){
+  deseq.exp <- NULL
+}
+if(!is.null(deseq.exp)){
+  main(cts.path, exp.path, gmt.file,
+       outfolder, p.value, nperm, 
+       verbose, do.contrasts = T, serialize = T, deseq.exp = deseq.exp)
+} else{
+  main(cts.path, exp.path, gmt.file,
+       outfolder, p.value, nperm, 
+       verbose, do.contrasts = T, serialize = T, deseq.exp = NULL)
+}
 
-main(cts.path, exp.path, gmt.file,
-     outfolder, p.value, nperm, 
-     verbose, do.contrasts = T, serialize = T)
 
   
