@@ -92,12 +92,14 @@ getDESeqRes      <- function(dds, coldata, contrast, p.value, outfolder, seriali
   out.df <- list("res" = res,
                  "sig" = sig,
                  "top10" = as.data.frame(top.10.genes))
+  
+  out.df$res <- rownames_to_column(out.df$res, var = "gene_symbol")
+  out.df$sig <- rownames_to_column(out.df$sig, var = "gene_symbol")
+  
   if(serialize){
     writexl::write_xlsx(out.df, 
                         here(outfolder,paste0(gsub(" ", "_", title), '_deg.xlsx')))
   }
-  out.df$res <- rownames_to_column(out.df$res, var = "gene_symbol")
-  out.df$sig <- rownames_to_column(out.df$sig, var = "gene_symbol")
   
   if(nrow(sig) > 0){
     out.df$any.sig <- T
