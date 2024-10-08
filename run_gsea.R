@@ -41,7 +41,7 @@ getColData    <- function(exp.data, cts, reference){
   
   coldata <- exp.data[order(exp.data[[1]]), ]
   names(coldata)[2] <- "condition"
-  coldata$condition <- relevel(factor(coldata$condition), ref = "Epithelioid")
+  coldata$condition <- relevel(factor(coldata$condition), ref = reference)
   
   return(coldata)
   
@@ -159,7 +159,7 @@ RunfGSEA <- function(gene.list, pathways, design, verbose){
 }
 
 # Load Libraries
-pkgs <- c("DESeq2", "tidyverse", "dplyr", "fgsea", "mesocore", "ggprism", "EnhancedVolcano")
+pkgs <- c("DESeq2", "tidyverse", "dplyr", "fgsea", "mesocore", "ggprism", "EnhancedVolcano", "docopt")
 suppressMessages(mesocore::handleRequirements(pkgs))
 
 #---- Header ----
@@ -186,12 +186,13 @@ print(arguments)
 
 cts.path  <- normalizePath(arguments$data_path)
 exp.path  <- arguments$experiment_design
-outfolder <- normalizePath(arguments$outfolder)
-gmt.file  <- arguments$gmt_file
+outfolder <- normalizePath(arguments$outfolder, mustWork = F)
+pathways  <- arguments$gmt_file
 p.value   <- as.double(arguments$p_value)
 reference <- arguments$reference
 deseq.exp <- arguments$deseq_exp
 verbose   <- as.integer(arguments$verbose)
+serialise <- T
 
 if(as.integer(arguments$verbose) == 1){
   verbose <- T
@@ -200,15 +201,6 @@ if(as.integer(arguments$verbose) == 1){
 }
 
 #----- Main -----
-# Load-in Data
-# cts.path  <- "/home/jan1/Documents/Cancer_Studies_PhD/Deciphering_Oncogenes/Workflow/curated_datasets/MEDUSA/MEDUSA_TMA/full_roi/EvsS_cts.csv"  # Assume the first column has gene/feature names
-# exp.path  <- "/home/jan1/Documents/Cancer_Studies_PhD/Deciphering_Oncogenes/Workflow/curated_datasets/MEDUSA/MEDUSA_TMA/full_roi/expData.csv" # Experiment data, should include condition info
-# pathways  <- "/home/jan1/bioinf-tools/db/molsigs/msigdb/h.all.v2024.1.Hs.symbols.gmt"
-# outfolder <- "/home/jan1/Documents/Cancer_Studies_PhD/Studies/Study_Biphasic/results/MEDUSA_TMA/full_roi"
-# reference <- "Epithelioid"
-# verbose   <- F
-# serialise <- T
-
 rnaseq.counts   <- readFile(cts.path)
 experiment.data <- readFile(exp.path)
 
@@ -217,10 +209,14 @@ outfolder       <- here(outfolder, dname)
 
 dir.create(outfolder, F, T)
 
+print("Ranking Genes...")
 DEG             <- RankGenes(rnaseq.counts, experiment.data, reference, verbose)
+
+print("Running fGSEA...")
 fGSEA           <- RunfGSEA(DEG$gene.list, pathways, DEG$design, verbose)
 
 if(serialise){
+  print(paste("Serialising results to...", outfolder))
   writexl::write_xlsx(list(significant = DEG$significant,
                            top10       = DEG$top.10,
                            bot10       = DEG$bot.10),
