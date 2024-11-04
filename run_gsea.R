@@ -100,6 +100,8 @@ RankGenes <- function(rnaseq.counts, experiment.data, reference, verbose){
   if(all(grepl(pattern = "^ENSG*", rownames(gene.list)))){
     gene.list$gene_symbol <- mapIds(org.Hs.eg.db, keys = row.names(gene.list), keytype = "ENSEMBL", column = "SYMBOL")
     
+  } else{
+    gene.list$gene_symbol <- rownames(gene.list)
   }
   gene.list <- na.omit(gene.list)
   
@@ -121,7 +123,7 @@ RankGenes <- function(rnaseq.counts, experiment.data, reference, verbose){
   }
   
   p <- EnhancedVolcano(gene.list,
-                       lab = gene.list[[1]],
+                       lab = gene.list$gene_symbol,
                        x = 'log2FoldChange',
                        y = 'pvalue') + 
     theme_prism() +
@@ -233,7 +235,9 @@ dir.create(outfolder, F, T)
 
 print("Ranking Genes...")
 DEG             <- RankGenes(rnaseq.counts, experiment.data, reference, verbose)
-
+print(head(DEG))
+print(names(DEG))
+print(head(DEG$gene.list))
 print("Running fGSEA...")
 fGSEA           <- RunfGSEA(DEG$gene.list, pathways, DEG$design, verbose)
 
