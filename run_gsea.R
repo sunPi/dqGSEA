@@ -1,4 +1,17 @@
 # Load Functions
+handleRequirements <- function(pkgs) {
+  ipkgs <- sapply(pkgs, function(...) require(..., character.only = TRUE))
+  if (any(!ipkgs)) {
+    BiocManager::install(pkgs[!ipkgs])
+    install.packages(pkgs[!ipkgs])
+  }
+  else {
+    message("\n\nCool! your machine has everything is needed.\n\n")
+  }
+  print("Loading required packages...")
+  pacman::p_load(pkgs, install = TRUE, character.only = TRUE)
+  return(pacman::p_loaded())
+}
 prepareCounts <- function(cts, verbose){
   if(verbose){
     print("Preparing RNA-seq counts for DEG and GSEA...")
@@ -17,6 +30,7 @@ prepareCounts <- function(cts, verbose){
     print("Moving first column to row names...")
   }
   cts <- column_to_rownames(cts, var = "gene_symbol")
+  cts <- cts[,order(colnames(cts))]
   
   # } else{
   #   if(verbose){
@@ -24,10 +38,10 @@ prepareCounts <- function(cts, verbose){
   #   }
   # }
   # Round values just in case
-  if(verbose){
-    print("Rounding the integers...")
-  }
-  cts <- round(cts)
+  # if(verbose){
+  #   print("Rounding the integers...")
+  # }
+  # cts <- round(cts)
   
   return(cts)
 }
@@ -41,7 +55,7 @@ getColData    <- function(exp.data, cts, reference){
   
   coldata <- exp.data[order(exp.data[[1]]), ]
   names(coldata)[2] <- "condition"
-  coldata$condition <- relevel(factor(coldata$condition), ref = reference)
+  # coldata$condition <- relevel(factor(coldata$condition), ref = reference)
   
   return(coldata)
   
@@ -64,21 +78,30 @@ RankGenes <- function(rnaseq.counts, experiment.data, reference, verbose){
     print("Running DESeq2...")
   }
   
+  # Step 2: Relevel the condition (for reference)
+  dds$condition <- relevel(dds$condition, ref = reference)
+  
   # Perform the DESeq analysis
   dds <- DESeq(dds)
   
   # Extract the results
   # Contrast is always built such as - "name of the column in coldata" "test" "reference"
   
-  test <- levels(coldata$condition)[levels(coldata$condition) != reference]
+  test <- levels(dds$condition)[levels(dds$condition) != reference]
   ctr <- c("condition", test, reference)
   
   if(verbose){
     print(paste0("Extracting list of DEG in ", test, "..."))
   }
   
-  gene.list <- results(dds, tidy = T, contrast = ctr)
-  names(gene.list)[1] <- "gene_symbol"
+  gene.list <- as.data.frame(results(dds))
+  # names(gene.list)[1] <- "gene_symbol"
+  
+  if(all(grepl(pattern = "^ENSG*", rownames(gene.list)))){
+    gene.list$gene_symbol <- mapIds(org.Hs.eg.db, keys = row.names(gene.list), keytype = "ENSEMBL", column = "SYMBOL")
+    
+  }
+  gene.list <- na.omit(gene.list)
   
   # Filter out the significant genes based on p.value and order/sort them
   sig <- dplyr::filter(gene.list, gene.list$padj < 0.05)
@@ -117,12 +140,11 @@ RankGenes <- function(rnaseq.counts, experiment.data, reference, verbose){
 }
 RunfGSEA <- function(gene.list, pathways, design, verbose){
   res <- gene.list %>% 
-    dplyr::select(gene_symbol, log2FoldChange) %>% 
+    dplyr::select(gene_symbol, stat) %>% 
     na.omit() %>% 
     distinct() %>% 
     group_by(gene_symbol) %>% 
-    summarize(stat=mean(log2FoldChange))
-  
+    summarize(stat=mean(stat))
   
   ranks <- deframe(res)
   head(ranks, 20)
@@ -159,8 +181,8 @@ RunfGSEA <- function(gene.list, pathways, design, verbose){
 }
 
 # Load Libraries
-pkgs <- c("DESeq2", "tidyverse", "dplyr", "fgsea", "mesocore", "ggprism", "EnhancedVolcano", "docopt")
-suppressMessages(mesocore::handleRequirements(pkgs))
+pkgs <- c("DESeq2", "tidyverse", "dplyr", "fgsea", "mesocore", "ggprism", "EnhancedVolcano", "docopt", "org.Hs.eg.db", "AnnotationDbi")
+suppressMessages(handleRequirements(pkgs))
 
 #---- Header ----
 "Mesothelioma AI Pipeline - Differential Expression using DESeq2
